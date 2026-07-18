@@ -1,0 +1,266 @@
+{
+  "name": "WF4 — Sunday Content Batch (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF4 — Sunday content batch (Gemini version)\nGenerates 3 LinkedIn post drafts from one topic bank row, using Google Gemini (free tier).\nCredentials: Supabase + Gemini (Header Auth `x-goog-api-key`).",
+        "height": 200,
+        "width": 380
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "trigger-1",
+      "name": "Domingo 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "content",
+        "limit": 1,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "topic"
+            }
+          ]
+        }
+      },
+      "id": "supa-topic",
+      "name": "Get 1 Topic",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const topic = $json.topic;\nconst system = `You write LinkedIn posts for Daniel Zabaleta, founder of Power Flow (operations automation consultancy, US market). Rules:\\n- English. Pain-first: open with the operational pain, never with the tool.\\n- NEVER mention 'Power Platform' in the hook or first 3 lines.\\n- Short paragraphs, one idea per block. Conversational, like a smart operator talking. Not a corporate blog.\\n- No hashtag spam (max 2 at the end, or none). No emoji. No em dashes.\\n- End with a question or a provocation, never with a salesy CTA.\\n- 120 to 220 words each.\\nReturn a JSON array of exactly 3 strings, each one a complete post. Output ONLY the JSON array, no markdown fences.`;\nreturn { json: {\n  topic_id: $json.id,\n  topic,\n  gemini_body: {\n    system_instruction: { parts: [{ text: system }] },\n    contents: [{ role: 'user', parts: [{ text: `Topic: ${topic}\\n\\nWrite 3 distinct post drafts (different angles: story, contrarian, practical).` }] }],\n    generationConfig: { maxOutputTokens: 2048 }\n  }\n}};"
+      },
+      "id": "code-build",
+      "name": "Build Gemini Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.gemini_body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "http-gemini",
+      "name": "Gemini 3 Drafts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Build Gemini Body').first().json;\nconst resp = $input.first().json;\nlet text = '';\ntry { text = resp.candidates[0].content.parts[0].text; } catch (e) { text = ''; }\nlet drafts = [];\ntry {\n  const start = text.indexOf('[');\n  const end = text.lastIndexOf(']');\n  drafts = JSON.parse(text.slice(start, end + 1));\n} catch (e) {\n  drafts = [text || 'PARSE FAILED'];\n}\nconst week = new Date().toISOString().slice(0, 10);\nreturn drafts.map(d => ({ json: { week, topic: src.topic, draft: d, status: 'draft', topic_id: src.topic_id } }));"
+      },
+      "id": "code-parse",
+      "name": "Parse 3 Drafts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "content",
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "week",
+              "fieldValue": "={{ $json.week }}"
+            },
+            {
+              "fieldId": "topic",
+              "fieldValue": "={{ $json.topic }}"
+            },
+            {
+              "fieldId": "draft",
+              "fieldValue": "={{ $json.draft }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "draft"
+            }
+          ]
+        }
+      },
+      "id": "supa-create",
+      "name": "Save Drafts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "content",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Get 1 Topic').first().json.id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "posted"
+            }
+          ]
+        }
+      },
+      "id": "supa-mark",
+      "name": "Mark Topic Used",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Domingo 8am": {
+      "main": [
+        [
+          {
+            "node": "Get 1 Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get 1 Topic": {
+      "main": [
+        [
+          {
+            "node": "Build Gemini Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Body": {
+      "main": [
+        [
+          {
+            "node": "Gemini 3 Drafts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini 3 Drafts": {
+      "main": [
+        [
+          {
+            "node": "Parse 3 Drafts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse 3 Drafts": {
+      "main": [
+        [
+          {
+            "node": "Save Drafts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Drafts": {
+      "main": [
+        [
+          {
+            "node": "Mark Topic Used",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Costa_Rica"
+  },
+  "pinData": {}
+}

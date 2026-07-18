@@ -1,0 +1,143 @@
+{
+  "name": "WF1 — Enrich & Draft (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF1 — Outreach engine\nCalls Google Gemini (free tier). Anthropic was the original plan, but a billing block on the Anthropic key mid-build forced a pivot to Gemini — marked a permanent decision on 2026-07-09. Full reasoning in the case study README.\n\nCredentials:\n1. Supabase (host + service_role key)\n2. Gemini: Header Auth credential → Name: `x-goog-api-key` · Value: your API key from aistudio.google.com",
+        "height": 280,
+        "width": 400
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-460, -100]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 6-21/2 * * *" }
+          ]
+        }
+      },
+      "id": "trigger-1",
+      "name": "Every 2h (6-21)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "status", "condition": "eq", "keyValue": "New" }
+          ]
+        }
+      },
+      "id": "supa-get-new",
+      "name": "Get New Leads",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.company_url }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "http-site",
+      "name": "Fetch Company Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Construye el body para Gemini con el voice guide de Daniel embebido.\nconst lead = $('Get New Leads').item.json;\n\nlet siteText = '';\ntry {\n  const raw = typeof $json.data === 'string' ? $json.data : JSON.stringify($json.data || '');\n  siteText = raw.replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .slice(0, 3000);\n} catch (e) { siteText = ''; }\n\nconst system = `You draft LinkedIn first-touch DMs for Daniel Zabaleta, founder of Power Flow, an operations automation consultancy. Daniel is a Power Platform and automation specialist with 5 years automating operations at a global fintech (63% productivity gains, systems used at VP level).\\n\\nVoice rules (non negotiable):\\n- Warm, curious, humble. Not pitchy. Direct but human.\\n- Under 5 lines total. Short sentences.\\n- Pattern: short opener, one SPECIFIC observation about them or their company, honest one-line positioning, ONE real question about their process.\\n- Never assume you can help before they confirm the problem. Never promise results.\\n- End with a question, always.\\n- No em dashes or en dashes anywhere. No emoji. No corporate jargon. No 'I would love to'. No three adjectives in a row.\\n- Positioning line to adapt naturally (do not paste verbatim every time): 'I help growing companies eliminate manual operations work.'\\n\\nOutput ONLY the message text. No preamble, no quotes, no explanations.`;\n\nconst userContent = `Prospect:\\n- Name: ${lead.name}\\n- Role: ${lead.role || 'unknown'}\\n- Company: ${lead.company || 'unknown'}\\n- Channel: ${lead.channel}\\n- Context notes from Daniel: ${lead.context_notes || 'none'}\\n- Company website text (may be empty): ${siteText || 'not available'}\\n\\nWrite the first-touch DM in English.`;\n\nreturn {\n  json: {\n    lead_id: lead.id,\n    gemini_body: {\n      system_instruction: { parts: [{ text: system }] },\n      contents: [{ role: 'user', parts: [{ text: userContent }] }],\n      generationConfig: { maxOutputTokens: 1024 }\n    }\n  }\n};"
+      },
+      "id": "code-build",
+      "name": "Build Gemini Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.gemini_body) }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "http-gemini",
+      "name": "Gemini Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const resp = $json;\nlet draft = '';\ntry {\n  draft = resp.candidates[0].content.parts[0].text.trim();\n} catch (e) { draft = ''; }\nif (!draft) { draft = 'DRAFT FAILED, revisar ejecución'; }\nreturn { json: { lead_id: $('Build Gemini Body').item.json.lead_id, draft } };"
+      },
+      "id": "code-extract",
+      "name": "Extract Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "id", "condition": "eq", "keyValue": "={{ $json.lead_id }}" }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "draft_msg", "fieldValue": "={{ $json.draft }}" },
+            { "fieldId": "status", "fieldValue": "Ready" }
+          ]
+        }
+      },
+      "id": "supa-update",
+      "name": "Save Draft (status=Ready)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Every 2h (6-21)": { "main": [[{ "node": "Get New Leads", "type": "main", "index": 0 }]] },
+    "Get New Leads": { "main": [[{ "node": "Fetch Company Site", "type": "main", "index": 0 }]] },
+    "Fetch Company Site": { "main": [[{ "node": "Build Gemini Body", "type": "main", "index": 0 }]] },
+    "Build Gemini Body": { "main": [[{ "node": "Gemini Draft", "type": "main", "index": 0 }]] },
+    "Gemini Draft": { "main": [[{ "node": "Extract Draft", "type": "main", "index": 0 }]] },
+    "Extract Draft": { "main": [[{ "node": "Save Draft (status=Ready)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Costa_Rica" },
+  "pinData": {}
+}

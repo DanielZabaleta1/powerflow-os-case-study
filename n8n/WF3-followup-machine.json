@@ -1,0 +1,209 @@
+{
+  "name": "WF3 — Follow-up State Machine (Power Flow)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF3 — Follow-up state machine (daily 6:00am)\nRules:\n- Contacted +4d → draft Touch 2 (t2_touch template from config)\n- T2 sent +8d → draft Touch 3 breakup (t3_breakup)\n- T3 sent +3d, no reply → Dormant\n- Proposal sent +3d and +7d → check-ins\n\nDoesn't call any LLM — personalizes fixed templates from the config table by find-and-replace. The draft lands in draft_msg and WF2's digest surfaces it that night.",
+        "height": 300,
+        "width": 400
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger-1",
+      "name": "6:00am diario",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "config",
+        "returnAll": true
+      },
+      "id": "supa-config",
+      "name": "Get Config",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true
+      },
+      "id": "supa-leads",
+      "name": "Get Leads",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Corre una vez. Aplica las reglas de la state machine y emite un item por lead a actualizar.\nconst cfgRows = $('Get Config').all().map(i => i.json).filter(r => r.key);\nconst cfg = Object.fromEntries(cfgRows.map(r => [r.key, r.value]));\nconst leads = $('Get Leads').all().map(i => i.json).filter(l => l.id);\n\nconst today = new Date();\nconst iso = d => d.toISOString().slice(0, 10);\nconst daysSince = dateStr => {\n  if (!dateStr) return 0;\n  return Math.floor((today - new Date(dateStr)) / 86400000);\n};\nconst fill = (tpl, lead) => String(tpl || '')\n  .replace(/{{\\s*first_name\\s*}}/g, (lead.name || '').split(' ')[0])\n  .replace(/{{\\s*company\\s*}}/g, lead.company || 'your company');\n\nconst updates = [];\nfor (const l of leads) {\n  const since = daysSince(l.last_touch || l.sent_date);\n  if (l.status === 'Contacted' && since >= 4) {\n    updates.push({ id: l.id, fields: {\n      draft_msg: fill(cfg.t2_touch, l), next_action: 'Send Touch 2', next_action_date: iso(today)\n    }});\n  } else if (l.status === 'T2 sent' && since >= 8) {\n    updates.push({ id: l.id, fields: {\n      draft_msg: fill(cfg.t3_breakup, l), next_action: 'Send Touch 3 (breakup)', next_action_date: iso(today)\n    }});\n  } else if (l.status === 'T3 sent' && since >= 3) {\n    updates.push({ id: l.id, fields: {\n      status: 'Dormant', next_action: '', next_action_date: null\n    }});\n  } else if (l.status === 'Proposal sent' && since === 3) {\n    updates.push({ id: l.id, fields: {\n      draft_msg: fill(cfg.proposal_followup_d3, l), next_action: 'Proposal check-in d3', next_action_date: iso(today)\n    }});\n  } else if (l.status === 'Proposal sent' && since >= 7) {\n    updates.push({ id: l.id, fields: {\n      draft_msg: fill(cfg.proposal_followup_d7, l), next_action: 'Proposal direct ask d7', next_action_date: iso(today)\n    }});\n  }\n}\n\nif (!updates.length) return [];\nreturn updates.map(u => ({ json: {\n  lead_id: u.id,\n  draft_msg: u.fields.draft_msg ?? null,\n  status: u.fields.status ?? null,\n  next_action: u.fields.next_action ?? null,\n  next_action_date: u.fields.next_action_date ?? null\n}}));"
+      },
+      "id": "code-rules",
+      "name": "Apply State Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Prepara solo los campos no nulos para el update\nconst out = { lead_id: $json.lead_id, fields: {} };\nfor (const k of ['draft_msg','status','next_action','next_action_date']) {\n  if ($json[k] !== null && $json[k] !== undefined) out.fields[k] = $json[k];\n}\nreturn { json: out };"
+      },
+      "id": "code-fields",
+      "name": "Prep Update Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT.supabase.co/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.fields) }}",
+        "options": {}
+      },
+      "id": "http-update",
+      "name": "Update Lead (PostgREST)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 'Update Lead' node\nUses PostgREST directly because the set of fields to update varies per lead.\nCredential: **Custom Auth** type with this JSON (service_role in both):\n{\"headers\":{\"apikey\":\"SERVICE_ROLE\",\"Authorization\":\"Bearer SERVICE_ROLE\"}}",
+        "height": 260,
+        "width": 360
+      },
+      "id": "note-2",
+      "name": "Sticky Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        -320
+      ]
+    }
+  ],
+  "connections": {
+    "6:00am diario": {
+      "main": [
+        [
+          {
+            "node": "Get Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Config": {
+      "main": [
+        [
+          {
+            "node": "Get Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Leads": {
+      "main": [
+        [
+          {
+            "node": "Apply State Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply State Rules": {
+      "main": [
+        [
+          {
+            "node": "Prep Update Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Update Fields": {
+      "main": [
+        [
+          {
+            "node": "Update Lead (PostgREST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Costa_Rica"
+  },
+  "pinData": {}
+}

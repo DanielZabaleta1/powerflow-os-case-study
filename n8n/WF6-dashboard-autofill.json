@@ -1,0 +1,128 @@
+{
+  "name": "WF6 — Dashboard Autofill",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF6 — Weekly dashboard autofill\nSunday 5pm. Reads `activities` (the source of truth for facts) for outreach_sent/replies/calls_booked/proposals_sent/followups_done, and `leads` for followups_due. Writes (upserts by week_start, never duplicates on re-run) one row into `dashboard_weeks`.\n\nrevenue_usd and hours stay at 0 — filled in by hand on the app's Dashboard page.\n\nCredentials: Supabase (native nodes) + Supabase REST (Custom Auth, same credential WF3 uses):\n{\"headers\":{\"apikey\":\"SERVICE_ROLE\",\"Authorization\":\"Bearer SERVICE_ROLE\"}}",
+        "height": 300,
+        "width": 420
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-460, -120]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 17 * * 0" }
+          ]
+        }
+      },
+      "id": "trigger-1",
+      "name": "Domingo 5pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const now = new Date();\nconst day = now.getDay(); // 0 = domingo\nconst monday = new Date(now);\nmonday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));\nconst sunday = new Date(monday);\nsunday.setDate(monday.getDate() + 6);\nconst nextMonday = new Date(sunday);\nnextMonday.setDate(sunday.getDate() + 1);\nconst iso = d => d.toISOString().slice(0, 10);\nreturn { json: {\n  week_start: iso(monday),\n  week_end: iso(sunday),\n  range_start_iso: monday.toISOString(),\n  range_end_iso: nextMonday.toISOString()\n} };"
+      },
+      "id": "code-week",
+      "name": "Compute Week",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "activities",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "created_at", "condition": "gte", "keyValue": "={{ $('Compute Week').first().json.range_start_iso }}" },
+            { "keyName": "created_at", "condition": "lt", "keyValue": "={{ $('Compute Week').first().json.range_end_iso }}" }
+          ]
+        }
+      },
+      "id": "supa-activities",
+      "name": "Get Week Activities",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "next_action_date", "condition": "gte", "keyValue": "={{ $('Compute Week').first().json.week_start }}" },
+            { "keyName": "next_action_date", "condition": "lte", "keyValue": "={{ $('Compute Week').first().json.week_end }}" }
+          ]
+        }
+      },
+      "id": "supa-leads-due",
+      "name": "Get Leads Due This Week",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [660, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const week = $('Compute Week').first().json;\nconst acts = $('Get Week Activities').all().map(i => i.json);\nconst leadsDue = $('Get Leads Due This Week').all().map(i => i.json).filter(l => l && l.id);\nconst count = k => acts.filter(a => a.kind === k).length;\n\nreturn { json: {\n  week_start: week.week_start,\n  outreach_sent: count('sent'),\n  replies: count('reply_received'),\n  calls_booked: count('call_booked'),\n  proposals_sent: count('proposal_sent'),\n  revenue_usd: 0,\n  followups_due: leadsDue.length,\n  followups_done: count('followup_done'),\n  hours: 0\n} };"
+      },
+      "id": "code-aggregate",
+      "name": "Aggregate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT.supabase.co/rest/v1/dashboard_weeks?on_conflict=week_start",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "content-type", "value": "application/json" },
+            { "name": "Prefer", "value": "resolution=merge-duplicates,return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "http-upsert",
+      "name": "Upsert Dashboard Week (PostgREST)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0]
+    }
+  ],
+  "connections": {
+    "Domingo 5pm": { "main": [[{ "node": "Compute Week", "type": "main", "index": 0 }]] },
+    "Compute Week": { "main": [[{ "node": "Get Week Activities", "type": "main", "index": 0 }]] },
+    "Get Week Activities": { "main": [[{ "node": "Get Leads Due This Week", "type": "main", "index": 0 }]] },
+    "Get Leads Due This Week": { "main": [[{ "node": "Aggregate Metrics", "type": "main", "index": 0 }]] },
+    "Aggregate Metrics": { "main": [[{ "node": "Upsert Dashboard Week (PostgREST)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Costa_Rica" },
+  "pinData": {}
+}

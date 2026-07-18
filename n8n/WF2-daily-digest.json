@@ -1,0 +1,90 @@
+{
+  "name": "WF2 — Daily Digest (Power Flow)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF2 — Daily digest, 7:25pm\nTonight's list: drafts ready to send, follow-ups due today, pending agency touches.\n\nDoesn't call any LLM — pure aggregation and HTML templating.\n\nCredentials: Supabase + Microsoft Outlook (M365).\nIf the Outlook node asks you to re-pick fields after import, that's normal: destination is your inbox, body is HTML from {{ $json.html }}.",
+        "height": 300,
+        "width": 380
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-460, -80]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "25 19 * * 1-5" }
+          ]
+        }
+      },
+      "id": "trigger-1",
+      "name": "7:25pm Lun-Vie",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true
+      },
+      "id": "supa-leads",
+      "name": "Get Leads",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "agencies",
+        "returnAll": true
+      },
+      "id": "supa-agencies",
+      "name": "Get Agencies",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Corre una vez para todos los items. Arma el HTML del digest.\nconst leads = $('Get Leads').all().map(i => i.json).filter(l => l.id);\nconst agencies = $('Get Agencies').all().map(i => i.json).filter(a => a.id);\nconst today = new Date().toISOString().slice(0, 10);\n\nconst ready = leads.filter(l => l.status === 'Ready');\nconst followups = leads.filter(l => l.next_action_date && l.next_action_date <= today && !['Won','Lost','Dormant','Ready','New'].includes(l.status));\nconst agFollow = agencies.filter(a => a.followup_date && a.followup_date <= today && !['Dead','Test project'].includes(a.status));\n\nconst esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\nconst blue = '#1C5DEA', ink = '#05070D', paper = '#F3F5F9';\n\nlet html = `<div style=\"font-family:Inter,Arial,sans-serif;background:${paper};padding:24px;color:${ink}\">`;\nhtml += `<h2 style=\"font-weight:200;letter-spacing:-0.02em\">POWER<strong style=\"font-weight:900\">FLOW</strong><span style=\"color:${blue}\">.</span> Lista de esta noche</h2>`;\n\nhtml += `<p style=\"font-size:14px\">Total: <b>${ready.length}</b> drafts por enviar, <b>${followups.length}</b> follow-ups, <b>${agFollow.length}</b> agencias.</p>`;\n\nif (ready.length) {\n  html += `<h3 style=\"margin-top:24px\">1. Enviar estos drafts (${ready.length})</h3>`;\n  for (const l of ready) {\n    html += `<div style=\"background:#fff;border:1px solid #ECEEF3;border-radius:12px;padding:16px;margin:8px 0\">`;\n    html += `<b>${esc(l.name)}</b> · ${esc(l.role)} · ${esc(l.company)} <a href=\"${esc(l.linkedin_url)}\" style=\"color:${blue}\">perfil</a>`;\n    html += `<p style=\"white-space:pre-wrap;font-size:14px;margin:8px 0 0\">${esc(l.draft_msg)}</p></div>`;\n  }\n}\n\nif (followups.length) {\n  html += `<h3 style=\"margin-top:24px\">2. Follow-ups de hoy (${followups.length})</h3>`;\n  for (const l of followups) {\n    html += `<div style=\"background:#fff;border:1px solid #ECEEF3;border-radius:12px;padding:16px;margin:8px 0\">`;\n    html += `<b>${esc(l.name)}</b> · ${esc(l.company)} · status: ${esc(l.status)}<br/>`;\n    html += `<span style=\"font-size:13px\">Acción: ${esc(l.next_action || 'follow up')}</span>`;\n    if (l.draft_msg) html += `<p style=\"white-space:pre-wrap;font-size:14px;margin:8px 0 0\">${esc(l.draft_msg)}</p>`;\n    html += `</div>`;\n  }\n}\n\nif (agFollow.length) {\n  html += `<h3 style=\"margin-top:24px\">3. Agencias (${agFollow.length})</h3><ul>`;\n  for (const a of agFollow) html += `<li>${esc(a.agency)} · ${esc(a.contact_name)} · ${esc(a.email)}</li>`;\n  html += `</ul>`;\n}\n\nif (!ready.length && !followups.length && !agFollow.length) {\n  html += `<p>Nada pendiente del sistema hoy. Cargá 10 prospectos nuevos o mandá 3 DMs manuales. Un mensaje. Una persona. Un día a la vez.</p>`;\n}\n\nhtml += `</div>`;\nreturn [{ json: { html, subject: `Power Flow: ${ready.length} drafts + ${followups.length + agFollow.length} follow-ups` } }];"
+      },
+      "id": "code-digest",
+      "name": "Build Digest HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "subject": "={{ $json.subject }}",
+        "bodyContent": "={{ $json.html }}",
+        "toRecipients": "daniel@runpowerflow.com",
+        "additionalFields": { "bodyContentType": "html" }
+      },
+      "id": "outlook-send",
+      "name": "Send Digest Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [880, 0]
+    }
+  ],
+  "connections": {
+    "7:25pm Lun-Vie": { "main": [[{ "node": "Get Leads", "type": "main", "index": 0 }]] },
+    "Get Leads": { "main": [[{ "node": "Get Agencies", "type": "main", "index": 0 }]] },
+    "Get Agencies": { "main": [[{ "node": "Build Digest HTML", "type": "main", "index": 0 }]] },
+    "Build Digest HTML": { "main": [[{ "node": "Send Digest Email", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Costa_Rica" },
+  "pinData": {}
+}

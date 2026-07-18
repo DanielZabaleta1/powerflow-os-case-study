@@ -1,0 +1,232 @@
+{
+  "name": "WF5 — Discovery Prep Brief (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## WF5 — Pre-call prep brief\nCalendly Trigger (invitee.created) → matches the lead by email and moves it to 'Call booked' → waits until 2h before the call → Gemini writes a 5-line brief from the 3 intake answers → emails it to your inbox.\n\n**One-time native trigger setup:**\n1. Calendly → developer.calendly.com/console/apps → Create new app → kind 'Web' → Sandbox or Production environment.\n2. Copy the OAuth Redirect URL n8n shows you when creating the 'Calendly account' credential (Calendly OAuth2 API type) and paste it as the Redirect URI in the Calendly app.\n3. Copy Calendly's Client ID + Client Secret into the n8n credential form → 'Connect my account'.\n4. On the 'Calendly Trigger' node: scope = User, events = Event Created. Activating the workflow makes n8n register the webhook subscription itself — no manual Calendly API call needed.\n5. Book a test call on your own Calendly and confirm in 'Extract Invitee' that `start_time` arrived (the code tries `calendar_event.start_time` first, with fallbacks — confirm against a real booking).\n6. The Calendly intake form needs the 3 discovery questions: most manual process today, how many people touch it, what's already been tried.\n\nNote: Calendly only exposes webhooks on paid plans (Standard/Teams/Enterprise) — confirm the plan before activating.\n\nCredentials: Calendly OAuth2 + Supabase + Gemini (Header Auth `x-goog-api-key`) + Microsoft Outlook.\nIf the lead doesn't exist in the `leads` table (someone books directly without going through outreach), the brief still sends — it just skips the status update.",
+        "height": 460,
+        "width": 460
+      },
+      "id": "note-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-480, -220]
+    },
+    {
+      "parameters": {
+        "scope": "user",
+        "events": ["invitee.created"]
+      },
+      "id": "calendly-trigger-1",
+      "name": "Calendly Trigger",
+      "type": "n8n-nodes-base.calendlyTrigger",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\nconst payload = body.payload || body;\nconst qa = payload.questions_and_answers || [];\nconst answer = (needle) => {\n  const hit = qa.find(x => String(x.question || '').toLowerCase().includes(needle));\n  return hit ? hit.answer : '';\n};\n// Real Calendly payloads nest it under calendar_event; scheduled_event/start_time are defensive\n// fallbacks in case the shape differs - confirm against a real test booking and simplify once known.\nconst startTime = (payload.calendar_event && payload.calendar_event.start_time)\n  || (payload.scheduled_event && payload.scheduled_event.start_time)\n  || payload.start_time\n  || null;\nreturn { json: {\n  name: payload.name || (payload.invitee && payload.invitee.name) || 'Unknown',\n  email: payload.email || (payload.invitee && payload.invitee.email) || '',\n  q1_process: answer('manual process'),\n  q2_people: answer('how many people'),\n  q3_tried: answer('what have you tried'),\n  start_time: startTime\n} };"
+      },
+      "id": "code-extract",
+      "name": "Extract Invitee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "email", "condition": "eq", "keyValue": "={{ $json.email }}" }
+          ]
+        }
+      },
+      "id": "supa-find-lead",
+      "name": "Find Lead by Email",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const invitee = $('Extract Invitee').first().json;\nconst matches = $input.all().map(i => i.json).filter(l => l && l.id);\nconst lead = matches[0] || null;\nreturn { json: {\n  ...invitee,\n  lead_id: lead ? lead.id : null,\n  lead_company: lead ? lead.company : null,\n  lead_role: lead ? lead.role : null,\n  lead_channel: lead ? lead.channel : null,\n  lead_notes: lead ? lead.context_notes : null\n} };"
+      },
+      "id": "code-merge",
+      "name": "Merge Lead Match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-lead-found",
+              "leftValue": "={{ $json.lead_id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-lead-found",
+      "name": "Lead Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "id", "condition": "eq", "keyValue": "={{ $json.lead_id }}" }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [{ "fieldId": "status", "fieldValue": "Call booked" }]
+        }
+      },
+      "id": "supa-update-lead",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, -120]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "activities",
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "lead_id", "fieldValue": "={{ $json.lead_id }}" },
+            { "fieldId": "kind", "fieldValue": "call_booked" }
+          ]
+        }
+      },
+      "id": "supa-log-activity",
+      "name": "Log Call Booked Activity",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1320, -120]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $('Merge Lead Match').first().json;\nlet waitIso = new Date().toISOString();\nif (d.start_time) {\n  const start = new Date(d.start_time);\n  const briefAt = new Date(start.getTime() - 2 * 60 * 60 * 1000);\n  waitIso = briefAt.toISOString();\n}\nreturn { json: { ...d, brief_at: waitIso } };"
+      },
+      "id": "code-wait-time",
+      "name": "Compute Brief Wait Time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ $json.brief_at }}"
+      },
+      "id": "wait-1",
+      "name": "Wait Until 2h Before",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $json;\nconst system = `You write a short pre-call brief for Daniel Zabaleta, founder of Power Flow, before a discovery call. Rules:\\n- Exactly 5 lines, plain text, no markdown headers.\\n- Line 1: who they are (name, and company/role if known).\\n- Line 2-3: read between the lines of their intake answers to name the likely real bottleneck.\\n- Line 4: one sharp question Daniel should ask early to confirm or kill that hypothesis.\\n- Line 5: one risk or watch-out for this call (budget signal, vague answer, urgency).\\nNo fluff, no 'I hope this helps', no preamble. Output only the 5 lines.`;\nconst userContent = `Invitee: ${d.name} (${d.email})\\nCompany on file: ${d.lead_company || 'unknown'}\\nRole on file: ${d.lead_role || 'unknown'}\\nSource channel: ${d.lead_channel || 'unknown'}\\nPrior notes: ${d.lead_notes || 'none'}\\n\\nIntake answers:\\n1. Most manual process today: ${d.q1_process || 'not answered'}\\n2. People who touch it: ${d.q2_people || 'not answered'}\\n3. What they have tried: ${d.q3_tried || 'not answered'}`;\nreturn { json: {\n  ...d,\n  gemini_body: {\n    system_instruction: { parts: [{ text: system }] },\n    contents: [{ role: 'user', parts: [{ text: userContent }] }],\n    generationConfig: { maxOutputTokens: 512 }\n  }\n} };"
+      },
+      "id": "code-build-gemini",
+      "name": "Build Gemini Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "content-type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.gemini_body) }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "http-gemini",
+      "name": "Gemini Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const src = $('Build Gemini Body').first().json;\nconst resp = $json;\nlet brief = '';\ntry { brief = resp.candidates[0].content.parts[0].text.trim(); } catch (e) { brief = 'BRIEF FAILED, revisar ejecucion'; }\nconst esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst html = `<div style=\"font-family:Inter,Arial,sans-serif;padding:20px\">`\n  + `<h3>Call prep — ${esc(src.name)}</h3>`\n  + `<p style=\"white-space:pre-wrap\">${esc(brief)}</p><hr/>`\n  + `<p style=\"font-size:13px;color:#565C6B\"><b>Intake answers</b><br/>`\n  + `1. ${esc(src.q1_process)}<br/>2. ${esc(src.q2_people)}<br/>3. ${esc(src.q3_tried)}</p></div>`;\nreturn { json: { subject: `Call prep: ${src.name}`, html } };"
+      },
+      "id": "code-parse-brief",
+      "name": "Parse Brief + Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "subject": "={{ $json.subject }}",
+        "bodyContent": "={{ $json.html }}",
+        "toRecipients": "daniel@runpowerflow.com",
+        "additionalFields": { "bodyContentType": "html" }
+      },
+      "id": "outlook-send",
+      "name": "Send Prep Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2640, 0]
+    }
+  ],
+  "connections": {
+    "Calendly Trigger": { "main": [[{ "node": "Extract Invitee", "type": "main", "index": 0 }]] },
+    "Extract Invitee": { "main": [[{ "node": "Find Lead by Email", "type": "main", "index": 0 }]] },
+    "Find Lead by Email": { "main": [[{ "node": "Merge Lead Match", "type": "main", "index": 0 }]] },
+    "Merge Lead Match": { "main": [[{ "node": "Lead Found?", "type": "main", "index": 0 }]] },
+    "Lead Found?": {
+      "main": [
+        [{ "node": "Update Lead Status", "type": "main", "index": 0 }],
+        [{ "node": "Compute Brief Wait Time", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Lead Status": { "main": [[{ "node": "Log Call Booked Activity", "type": "main", "index": 0 }]] },
+    "Log Call Booked Activity": { "main": [[{ "node": "Compute Brief Wait Time", "type": "main", "index": 0 }]] },
+    "Compute Brief Wait Time": { "main": [[{ "node": "Wait Until 2h Before", "type": "main", "index": 0 }]] },
+    "Wait Until 2h Before": { "main": [[{ "node": "Build Gemini Body", "type": "main", "index": 0 }]] },
+    "Build Gemini Body": { "main": [[{ "node": "Gemini Brief", "type": "main", "index": 0 }]] },
+    "Gemini Brief": { "main": [[{ "node": "Parse Brief + Build Email", "type": "main", "index": 0 }]] },
+    "Parse Brief + Build Email": { "main": [[{ "node": "Send Prep Email", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Costa_Rica" },
+  "pinData": {}
+}
