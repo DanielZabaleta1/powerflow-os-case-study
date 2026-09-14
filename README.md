@@ -2,6 +2,10 @@
 
 **An outreach operating system for a solo automation agency: AI-drafted personalized messages, automated follow-up state machine, and a custom CRM — built on n8n, Supabase, Gemini, and React, running for ~$20/month total — $0 of that on AI.**
 
+[![Watch the walkthrough video](https://i.ytimg.com/vi/k36qqaFpKyE/hqdefault.jpg)](https://youtu.be/k36qqaFpKyE)
+
+*[▶ Watch the 2-minute walkthrough](https://youtu.be/k36qqaFpKyE)*
+
 ```mermaid
 flowchart LR
     A["Prospect input"] --> B["WF1: scrape company site<br/>+ Gemini drafts DM"]
