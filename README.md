@@ -4,7 +4,7 @@
 
 [![Watch the walkthrough video](https://i.ytimg.com/vi/k36qqaFpKyE/hqdefault.jpg)](https://youtu.be/k36qqaFpKyE)
 
-*[▶ Watch the 2-minute walkthrough](https://youtu.be/k36qqaFpKyE)*
+*https://github.com/user-attachments/assets/6f19a4c4-f54e-46d0-8e54-407864ccc7e0*
 
 ```mermaid
 flowchart LR
