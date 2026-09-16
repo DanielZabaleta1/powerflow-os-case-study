@@ -2,7 +2,7 @@
 
 **An outreach operating system for a solo automation agency: AI-drafted personalized messages, automated follow-up state machine, and a custom CRM — built on n8n, Supabase, Gemini, and React, running for ~$20/month total — $0 of that on AI.**
 
-https://github.com/user-attachments/assets/6f19a4c4-f54e-46d0-8e54-407864ccc7e0
+https://github.com/user-attachments/assets/7b0180e1-c9cc-4ca2-8e53-48d61f91a2ac
 
 ```mermaid
 flowchart LR
